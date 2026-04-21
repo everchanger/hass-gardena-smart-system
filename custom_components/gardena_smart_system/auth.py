@@ -165,6 +165,21 @@ class GardenaAuthenticationManager:
         
         return headers
 
+    def get_private_api_headers(self, include_json: bool = False) -> dict:
+        """Get authentication headers for the undocumented smart.gardena.com API.
+        
+        The private API does not require an API key, only the Bearer token.
+        """
+        headers = {"Authorization-Provider": "husqvarna"}
+
+        if self._access_token:
+            headers["Authorization"] = f"Bearer {self._access_token}"
+
+        if include_json:
+            headers["Content-Type"] = "application/json"
+
+        return headers
+
     async def close(self) -> None:
         """Close the authentication manager."""
         if self._session and not self._session.closed:
