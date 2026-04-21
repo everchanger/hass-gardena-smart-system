@@ -5,6 +5,7 @@ import asyncio
 import logging
 from typing import Any, Optional
 
+import aiohttp
 from homeassistant.components.device_tracker import SourceType, TrackerEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
@@ -188,10 +189,10 @@ class GardenaMowerTracker(GardenaEntity, TrackerEntity):
             )
             if device_data is not None and self._update_position_from_data(device_data):
                 self.async_write_ha_state()
-        except Exception as exc:
-            _LOGGER.debug(
-                "Position fetch failed for mower %s: %s", self._device_id, exc
-            )
+        except aiohttp.ClientError as exc:
+            _LOGGER.debug("Network error fetching position for mower %s: %s", self._device_id, exc)
+        except Exception:
+            _LOGGER.warning("Unexpected error fetching position for mower %s", self._device_id, exc_info=True)
 
     async def _activate_position_stream(self) -> None:
         """Send a keepalive PUT so the GPS event stream stays active."""
@@ -204,10 +205,10 @@ class GardenaMowerTracker(GardenaEntity, TrackerEntity):
             await self.coordinator.client.activate_mower_position(
                 self._device_id, device.location_id, self._lona_ability_id
             )
-        except Exception as exc:
-            _LOGGER.debug(
-                "Position keepalive failed for mower %s: %s", self._device_id, exc
-            )
+        except aiohttp.ClientError as exc:
+            _LOGGER.debug("Network error sending position keepalive for mower %s: %s", self._device_id, exc)
+        except Exception:
+            _LOGGER.warning("Unexpected error sending position keepalive for mower %s", self._device_id, exc_info=True)
 
     async def _position_tracking_loop(self) -> None:
         """Background task that polls for position while the mower is mowing."""
@@ -228,10 +229,7 @@ class GardenaMowerTracker(GardenaEntity, TrackerEntity):
 
                 if self._is_mowing():
                     await self._fetch_and_update_position()
-                    _LOGGER.debug(
-                        "Position updated for mower %s: lat=%s lon=%s",
-                        self._device_id, self._latitude, self._longitude,
-                    )
+                    _LOGGER.debug("Position updated for mower %s", self._device_id)
                 else:
                     _LOGGER.debug(
                         "Mower %s is not mowing; skipping position poll",
