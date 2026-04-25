@@ -11,21 +11,21 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import DOMAIN
+from homeassistant.components.lawn_mower import LawnMowerActivity
+
+from .const import DOMAIN, MOWER_ACTIVITY_MAP
 from .coordinator import GardenaSmartSystemCoordinator
 from .entities import GardenaEntity
 
 _LOGGER = logging.getLogger(__name__)
 
 # Activities that mean the mower is actively out on the lawn.
-# Position polling is only useful while the mower is in one of these states.
+# Derived from MOWER_ACTIVITY_MAP so this set stays in sync with const.py
+# and never misses activities like OK_CUTTING_TIMER_OVERRIDDEN.
 _MOWING_ACTIVITIES = frozenset(
-    [
-        "OK_CUTTING",
-        "OK_CUTTING_NOT_AUTO",
-        "OK_SEARCHING",
-        "OK_LEAVING",
-    ]
+    activity
+    for activity, ha_activity in MOWER_ACTIVITY_MAP.items()
+    if ha_activity == LawnMowerActivity.MOWING
 )
 
 # How often (in seconds) to poll for a fresh GPS position while mowing.
