@@ -11,25 +11,30 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import DOMAIN
+from homeassistant.components.lawn_mower import LawnMowerActivity
+
+from .const import DOMAIN, MOWER_ACTIVITY_MAP
 from .coordinator import GardenaSmartSystemCoordinator
 from .entities import GardenaEntity
 
 _LOGGER = logging.getLogger(__name__)
 
 # Activities that mean the mower is actively out on the lawn.
-# Position polling is only useful while the mower is in one of these states.
+# Derived from MOWER_ACTIVITY_MAP so this set stays in sync with const.py
+# and never misses activities like OK_CUTTING_TIMER_OVERRIDDEN.
 _MOWING_ACTIVITIES = frozenset(
-    [
-        "OK_CUTTING",
-        "OK_CUTTING_NOT_AUTO",
-        "OK_SEARCHING",
-        "OK_LEAVING",
-    ]
+    activity
+    for activity, ha_activity in MOWER_ACTIVITY_MAP.items()
+    if ha_activity == LawnMowerActivity.MOWING
 )
 
 # How often (in seconds) to poll for a fresh GPS position while mowing.
 _POLL_INTERVAL = 30
+
+# How often (in seconds) to refresh the last-known position while docked/idle.
+# A less-frequent poll keeps coordinates up-to-date so the entity always has
+# a valid lat/lon for the HA map card, even when the mower is not mowing.
+_IDLE_POLL_INTERVAL = 600
 
 # How often (in seconds) the position keepalive PUT must be re-sent.
 # The undocumented API deactivates the stream after ~10 minutes of silence,
@@ -170,7 +175,12 @@ class GardenaMowerTracker(GardenaEntity, TrackerEntity):
                         if value.get("isRealTimeReady"):
                             lat = value.get("realTimeLatitude", lat)
                             lon = value.get("realTimeLongitude", lon)
-                        if lat is not None and lon is not None:
+                        # Reject (0, 0) – the Gardena API returns these
+                        # placeholder values when the mower has no GPS fix
+                        # (e.g. while docked indoors).  Treating them as
+                        # valid would pin the entity to the middle of the
+                        # Atlantic Ocean and break the HA map display.
+                        if lat is not None and lon is not None and (lat != 0 or lon != 0):
                             self._latitude = lat
                             self._longitude = lon
                             return True
@@ -211,7 +221,13 @@ class GardenaMowerTracker(GardenaEntity, TrackerEntity):
             _LOGGER.warning("Unexpected error sending position keepalive for mower %s", self._device_id, exc_info=True)
 
     async def _position_tracking_loop(self) -> None:
-        """Background task that polls for position while the mower is mowing."""
+        """Background task that polls for the mower's GPS position.
+
+        While mowing, position is refreshed every ``_POLL_INTERVAL`` seconds so
+        the map tracks the mower in near-real-time.  While idle/docked, position
+        is refreshed every ``_IDLE_POLL_INTERVAL`` seconds so the entity always
+        has valid coordinates for the HA map card regardless of mowing state.
+        """
         _LOGGER.debug("Position tracking started for mower %s", self._device_id)
 
         # Fetch an initial position to discover the lona_ability_id and provide
@@ -221,19 +237,31 @@ class GardenaMowerTracker(GardenaEntity, TrackerEntity):
             await self._activate_position_stream()
 
         seconds_since_keepalive = 0
+        seconds_since_idle_poll = 0
 
         try:
             while True:
                 await asyncio.sleep(_POLL_INTERVAL)
                 seconds_since_keepalive += _POLL_INTERVAL
+                seconds_since_idle_poll += _POLL_INTERVAL
 
                 if self._is_mowing():
                     await self._fetch_and_update_position()
+                    seconds_since_idle_poll = 0
                     _LOGGER.debug("Position updated for mower %s", self._device_id)
+                elif seconds_since_idle_poll >= _IDLE_POLL_INTERVAL:
+                    # Refresh last-known position while docked/idle so the
+                    # entity always has valid coordinates for the map card.
+                    seconds_since_idle_poll = 0
+                    await self._fetch_and_update_position()
+                    _LOGGER.debug(
+                        "Idle position refresh for mower %s", self._device_id
+                    )
                 else:
                     _LOGGER.debug(
-                        "Mower %s is not mowing; skipping position poll",
+                        "Mower %s is not mowing; next idle refresh in %ds",
                         self._device_id,
+                        _IDLE_POLL_INTERVAL - seconds_since_idle_poll,
                     )
 
                 # Keepalive: re-activate the stream every 8 minutes regardless
